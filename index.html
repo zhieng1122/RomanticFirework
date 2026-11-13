@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="先是一片漆黑，然后，整片夜空为烟花亮起。">
+  <title>夜空</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
+  </style>
+</head>
+<body>
+  <canvas id="sky" aria-label="全屏烟花表演，自动播放。"></canvas>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.getElementById('sky');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const TAU = Math.PI * 2;
+      const random = (a, b) => a + Math.random() * (b - a);
+      const choose = a => a[Math.floor(Math.random() * a.length)];
+      const palettes = [
+        ['255,92,179', '170,101,255', '107,201,255', '255,215,250'],
+        ['255,185,73', '255,222,146', '255,109,83', '255,246,210'],
+        ['64,224,255', '100,151,255', '173,139,255', '211,250,255'],
+        ['89,255,181', '193,255,127', '91,225,255', '223,255,239'],
+        ['255,94,106', '255,157,84', '255,213,99', '255,235,217']
+      ];
+      const spectrum = ['255,45,57', '255,162,78', '255,228,108', '112,255,173', '95,215,255', '151,134,255', '250,125,240'];
+      let W, H, DPR, mobile, limit, particles = [], rockets = [], halos = [], rings = [], formations = [], queue = [];
+      let last = null, time = 0, nextRandom = 2.8, paused = false, pointer = null, pointerDelay = 0, lastBurst = -1;
+      let audio, output, noise, soundReady = false;
+      const intro = 2.2, duration = 116;
+      const playbackSpeed = 1.12;
+      const schedule = [
+        [2.2, 'opening'], [10.2, 'second'], [16.5, 'cross'], [23, 'gold'],
+        [25, 'thunder-title'], [31.5, 'pikachu'], [37.5, 'thunder'],
+        [41, 'pokeball'], [50, 'eevee'], [60, 'charmander'],
+        [70, 'squirtle'], [80, 'bulbasaur'], [90, 'fan'], [94, 'rings'],
+        [99, 'finale'], [107, 'gold'], [109, 'gold']
+      ];
+      let cue = 0;
+      function size() {
+        W = innerWidth; H = innerHeight; mobile = W < 700;
+        DPR = Math.min(devicePixelRatio || 1, 1.75); limit = reduced ? 1300 : mobile ? 2500 : 4600;
+        canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+        reset(); last = null;
+      }
+      function spark(x, y, vx, vy, color, life, radius, gravity = 38, drag = .75, age = 0) {
+        if (particles.length >= limit) return;
+        const decay = Math.exp(-drag * age), travel = (1 - decay) / drag;
+        x += vx * travel; y += vy * travel + gravity * age * age * .25;
+        particles.push({ x, y, px: x, py: y, vx: vx * decay, vy: vy * decay + gravity * age * .5,
+          color, life: life - age, total: life, radius, gravity, drag, glitter: Math.random() > .6, seed: random(0, TAU) });
+      }
+      function burst(x, y, type = 'sphere', scale = 1, palette = choose(palettes), age = 0, tempo = choose([.6, .8, 1, 1.3, 1.65])) {
+        const base = Math.min(W * (mobile ? .48 : .29), H * .39) * scale * (reduced ? .7 : 1);
+        const count = Math.round((mobile ? 210 : 340) * Math.min(scale, 1.5) * (reduced ? .55 : 1));
+        const offset = Math.floor(Math.random() * spectrum.length);
+        const roll = Math.random();
+        const colorMode = roll < .35 ? 'mono' : roll < .72 ? 'duo' : 'rainbow';
+        const primary = choose(spectrum.slice(1));
+        const burstColors = colorMode === 'mono' ? [primary] : colorMode === 'duo'
+          ? choose([[spectrum[4], spectrum[2]], [spectrum[5], spectrum[3]], [spectrum[6], spectrum[4]], [spectrum[1], spectrum[5]]])
+          : spectrum.map((_, i) => spectrum[(i + offset) % spectrum.length]);
+        const main = burstColors[0], willow = type === 'willow';
+        for (let i = 0; i < count; i++) {
+          const a = i / count * TAU + random(-.015, .015), band = i % burstColors.length;
+          const radialScale = burstColors.length === 1
+            ? (type === 'ring' ? random(.94, 1.05) : Math.sqrt(Math.random()) * 1.05)
+            : burstColors.length === 2 ? (band === 0 ? random(.3, .51) : random(.84, 1.04))
+            : (.24 + .76 * band / (burstColors.length - 1)) * random(.96, 1.04);
+          const radius = base * radialScale;
+          let vx, vy;
+          const color = burstColors[band];
+          if (type === 'heart') {
+            vx = 16 * Math.pow(Math.sin(a), 3) * radius / 17;
+            vy = -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a)) * radius / 17;
+          } else if (type === 'saturn' && i % 3) {
+            const rx = Math.cos(a) * radius * 1.3, ry = Math.sin(a) * radius * .3;
+            vx = rx * .94 + ry * .34; vy = -rx * .34 + ry * .94;
+          } else {
+            vx = Math.cos(a) * radius; vy = Math.sin(a) * radius;
+          }
+          const life = (willow ? random(3.5, 5.3) : random(2.3, 3.8)) / tempo;
+          const gravity = (type === 'heart' ? 12 : willow ? 61 : 33) * tempo * tempo;
+          spark(x, y, vx * tempo, vy * tempo, color, life, random(.7, 1.7), gravity, (willow ? .5 : .75) * tempo, age);
+          if (i % 6 === 0) {
+            const coreSpeed = base * tempo * random(.08, .16);
+            spark(x, y, Math.cos(a) * coreSpeed, Math.sin(a) * coreSpeed, burstColors[0], random(1.8, 2.7) / tempo, 1.1, 18 * tempo * tempo, .9 * tempo, age);
+          }
+        }
+        if (halos.length < 14) halos.push({ x, y, r: base, age, life: 1.5 / tempo, tempo, color: main });
+        if (!reduced && rings.length < 18) rings.push({ x, y, r: base * 1.2, age, life: .9 / tempo, color: main });
+        boom(x / W, scale);
+      }
+      function fire(x, y, type = choose(['sphere', 'sphere', 'saturn', 'ring', 'heart']), scale = random(.7, 1.05), palette, flight = {}) {
+        if (rockets.length >= 18) return;
+        const sx = W * (flight.origin ?? random(.15, .85));
+        const pace = Math.random();
+        const flightTime = flight.duration ?? (pace < .3 ? random(.75, 1.25) : pace < .7 ? random(1.6, 2.4) : random(2.8, 3.7));
+        rockets.push({ sx, sy: H * 1.05, x: sx, y: H * 1.05, tx: x, ty: y, age: 0,
+          life: flightTime, hold: flight.hold ?? random(.08, .25), shed: 0,
+          pattern: flight.pattern, trail: [], type, scale, palette: palette || choose(palettes) });
+      }
+      function later(delay, x, y, type, scale, palette) {
+        if (queue.length < 65) queue.push({ at: time + delay, x, y, type, scale, palette });
+      }
+      function drawing() {
+        const points = [];
+        const dot = (x, y, color) => points.push([(x - 300) / 600, (y - 265) / 600, color]);
+        function path(segments, color) {
+          let [x, y] = segments[0];
+          for (const s of segments.slice(1)) {
+            if (s.length === 2) {
+              const steps = Math.max(2, Math.ceil(Math.hypot(s[0] - x, s[1] - y) / 3.5));
+              for (let i = 0; i < steps; i++) { const t = i / steps; dot(x + (s[0] - x) * t, y + (s[1] - y) * t, color); }
+              [x, y] = s;
+            } else {
+              const steps = Math.max(12, Math.ceil((Math.hypot(s[0] - x, s[1] - y) + Math.hypot(s[2] - s[0], s[3] - s[1]) + Math.hypot(s[4] - s[2], s[5] - s[3])) / 3.5));
+              for (let i = 0; i < steps; i++) {
+                const t = i / steps, u = 1 - t;
+                dot(u * u * u * x + 3 * u * u * t * s[0] + 3 * u * t * t * s[2] + t * t * t * s[4], u * u * u * y + 3 * u * u * t * s[1] + 3 * u * t * t * s[3] + t * t * t * s[5], color);
+              }
+              x = s[4]; y = s[5];
+            }
+          }
+        }
+        function ellipse(cx, cy, rx, ry, color, start = 0, end = TAU) {
+          const steps = Math.max(14, Math.ceil((rx + ry) * .5 * (end - start) / 3.5));
+          for (let i = 0; i < steps; i++) { const a = start + (end - start) * i / steps; dot(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, color); }
+        }
+        return { points, path, ellipse, dot };
+      }
+      function makePikachu() {
+        const d = drawing(), yellow = '255,219,74', amber = '227,160,61', red = '255,79,78', white = '255,244,198';
+        // Lightning-shaped tail behind the body, followed by the long ears and silhouette.
+        d.path([[388,414], [436,376], [414,349], [465,304], [442,277], [545,229], [508,307], [483,300], [491,338], [450,370], [455,410], [395,451]], yellow);
+        d.path([[212,278], [194,263,184,227,202,193], [169,106], [145,31,157,27,176,43], [207,79,227,125,252,159],
+          [278,145,314,146,339,162], [388,74], [417,21,431,10,431,24], [436,66,423,140,405,193],
+          [435,218,441,255,400,285], [374,306,381,333,388,359], [404,398,400,439,381,463],
+          [408,474,411,492,390,496], [364,501,343,496,329,482], [305,490,274,489,251,480],
+          [229,495,203,496,189,485], [184,475,199,466,213,459], [197,421,207,349,228,303], [220,292,215,285,212,278]], yellow);
+        // Ear tips, paws, face and the unmistakable red cheeks.
+        d.path([[168,99], [189,87,198,89,209,101]], amber);
+        d.path([[402,98], [416,105,424,109,429,112]], amber);
+        d.path([[221,331], [204,337,192,345,180,338], [159,321,146,320,146,331], [160,350,190,374,207,378], [216,382,226,373,231,365]], yellow);
+        d.path([[380,332], [402,338,414,326,431,319], [447,312,456,322,448,334], [436,351,409,374,393,378], [382,379,373,372,368,365]], yellow);
+        d.ellipse(250, 228, 9, 13, white); d.ellipse(350, 228, 9, 13, white);
+        d.ellipse(247, 223, 2, 3, '255,255,245'); d.ellipse(347, 223, 2, 3, '255,255,245');
+        d.path([[294,249], [306,249], [300,255], [294,249]], amber);
+        d.path([[278,269], [284,280,295,276,300,267], [306,279,318,280,325,268]], amber);
+        for (const x of [218, 383]) { d.ellipse(x, 265, 16, 16, red); d.ellipse(x, 265, 10, 10, red); d.ellipse(x, 265, 4, 4, red); }
+        d.path([[222,468], [228,477]], amber); d.path([[235,466], [241,476]], amber);
+        d.path([[355,472], [352,483]], amber); d.path([[369,472], [366,484]], amber);
+        return d.points;
+      }
+      function makeEevee() {
+        const d = drawing(), fur = '237,176,107', cream = '255,235,193', brown = '182,119,75', eye = '255,242,218';
+        // The broad, bushy tail and its cream tip sit behind the fluffy collar.
+        d.path([[374,397], [423,381,457,350,476,309], [494,278,507,243,497,214],
+          [519,222,541,253,537,287], [540,351,504,411,443,438], [414,451,390,441,374,422]], fur);
+        d.path([[477,309], [490,304], [493,286], [505,291], [513,271], [527,274], [536,258]], cream);
+        d.path([[214,183], [174,155,141,92,132,30], [173,48,223,101,240,164],
+          [269,148,309,147,342,166], [365,105,387,54,410,31], [420,98,406,157,374,186],
+          [408,220,401,260,367,281], [331,305,247,307,215,282], [185,261,182,218,214,183]], fur);
+        d.path([[152,63], [187,100,211,139,217,167]], brown);
+        d.path([[395,67], [390,110,377,143,360,163]], brown);
+        d.path([[239,332], [215,365,211,422,232,458], [208,467,207,482,233,486],
+          [256,492,274,483,278,466], [300,474,321,475,341,466], [349,484,370,492,394,483],
+          [415,472,403,462,383,457], [398,415,388,370,365,333]], fur);
+        d.path([[213,279], [221,295], [202,295], [224,317], [207,325], [237,339], [227,350],
+          [263,348], [272,365], [295,350], [312,365], [327,347], [352,351], [350,335],
+          [381,322], [365,305], [385,293], [364,278]], cream);
+        d.path([[266,375], [263,425,264,451,278,466]], brown);
+        d.path([[345,375], [352,418,349,448,341,466]], brown);
+        for (const x of [251, 337]) {
+          d.ellipse(x, 231, 11, 16, eye); d.ellipse(x - 3, 225, 3, 4, eye);
+        }
+        d.path([[287,253], [302,253], [294,260], [287,253]], brown);
+        d.path([[273,271], [281,281,290,280,295,269], [301,279,312,282,319,270]], cream);
+        d.path([[227,472], [232,479]], cream); d.path([[240,471], [244,479]], cream);
+        d.path([[371,471], [367,479]], cream); d.path([[384,470], [380,478]], cream);
+        return d.points;
+      }
+      function makeCharmander() {
+        const d = drawing(), orange = '255,163,76', cream = '255,231,167', fire = '255,96,57', yellow = '255,224,91', eyes = '173,236,246';
+        d.path([[374,404], [426,432,486,407,494,357], [499,338,497,323,491,309],
+          [477,307], [482,347,468,380,430,384], [410,390,391,380,379,373]], orange);
+        d.path([[485,331], [455,307,460,280,474,263], [478,279], [495,257,485,236,501,210],
+          [505,242,531,263,527,282], [537,272], [546,302,529,325,508,332]], fire);
+        d.path([[490,320], [475,302,485,285,493,276], [492,291], [509,276,506,260,507,252],
+          [521,281,522,307,506,322]], yellow);
+        d.path([[300,112], [238,108,199,143,194,196], [188,237,206,266,241,283],
+          [225,319,215,357,219,395], [202,417,180,434,188,453], [204,472,242,477,263,461],
+          [285,477,317,479,338,462], [365,479,402,468,406,451], [409,435,389,421,376,403],
+          [384,360,368,313,352,284], [382,268,400,240,396,202], [395,149,358,111,300,112]], orange);
+        d.ellipse(297, 374, 64, 80, cream);
+        d.path([[230,310], [203,295,180,309,174,331], [169,344,181,354,194,348], [211,340,224,345,236,354]], orange);
+        d.path([[363,308], [387,297,411,309,419,331], [424,345,412,356,400,349], [385,342,376,345,364,354]], orange);
+        d.path([[183,329], [194,334], [184,341]], cream); d.path([[411,329], [400,334], [411,342]], cream);
+        for (const x of [249, 342]) { d.ellipse(x, 195, 10, 19, eyes); d.ellipse(x - 3, 188, 2.5, 4, cream); }
+        d.ellipse(281, 224, 2, 2, orange); d.ellipse(310, 224, 2, 2, orange);
+        d.path([[238,242], [268,262,323,267,354,239], [340,262,317,276,279,269], [258,265,247,255,238,242]], cream);
+        d.path([[253,251], [258,260], [262,255]], cream); d.path([[332,251], [328,261], [323,256]], cream);
+        d.path([[211,451], [216,461]], cream); d.path([[229,451], [232,465]], cream);
+        d.path([[368,452], [364,465]], cream); d.path([[386,448], [380,460]], cream);
+        return d.points;
+      }
+      function makeSquirtle() {
+        const d = drawing(), blue = '112,220,255', cream = '255,228,170', shell = '201,148,101', rim = '255,241,202', eye = '255,169,198';
+        d.path([[356,264], [409,249,447,300,435,358], [430,399,408,428,374,439]], shell);
+        d.path([[367,278], [404,280,426,312,424,348], [420,386,402,410,377,419]], rim);
+        d.path([[414,381], [463,422,507,391,485,350], [474,328,447,333,451,352], [455,373,482,373,477,355],
+          [476,347,469,346,466,352]], blue);
+        d.path([[218,272], [183,252,149,263,145,286], [147,307,179,319,209,321]], blue);
+        d.path([[363,270], [394,249,424,269,425,290], [425,307,402,320,380,320]], blue);
+        d.path([[224,419], [199,430,180,456,192,472], [209,488,241,481,260,461]], blue);
+        d.path([[342,451], [362,483,402,486,412,469], [422,452,390,428,369,419]], blue);
+        d.ellipse(291, 350, 86, 105, cream);
+        d.path([[225,296], [267,320], [316,320], [357,298]], shell);
+        d.path([[208,354], [267,354], [316,354], [375,354]], shell);
+        d.path([[226,411], [267,390], [316,390], [355,414]], shell);
+        d.path([[267,320], [267,390]], shell); d.path([[316,320], [316,390]], shell);
+        d.path([[198,211], [167,173,190,111,234,89], [277,62,343,77,373,124],
+          [406,173,381,226,346,246], [308,270,236,258,212,233], [205,226,200,218,198,211]], blue);
+        d.ellipse(246, 146, 13, 23, eye); d.ellipse(335, 145, 13, 23, eye);
+        d.ellipse(241, 137, 3, 5, rim); d.ellipse(330, 136, 3, 5, rim);
+        d.path([[236,211], [264,233,318,235,349,207]], rim);
+        d.ellipse(281, 197, 1.8, 1.8, blue); d.ellipse(305, 197, 1.8, 1.8, blue);
+        for (const x of [202, 218, 234]) d.path([[x,463], [x + 3,473]], rim);
+        for (const x of [369, 385, 400]) d.path([[x,462], [x - 4,473]], rim);
+        return d.points;
+      }
+      function makeBulbasaur() {
+        const d = drawing(), skin = '99,231,193', spots = '48,161,145', leaf = '153,246,112', vein = '92,198,100', eye = '255,112,138', white = '236,255,224';
+        // The large layered bulb distinguishes the grass starter even at a distance.
+        d.path([[299,242], [286,193,310,135,346,113], [345,88,373,65,405,59],
+          [425,87,466,98,472,136], [511,170,498,220,467,245], [416,270,345,270,299,242]], leaf);
+        d.path([[405,60], [377,109,379,177,393,249]], vein);
+        d.path([[346,113], [330,158,335,210,359,253]], vein);
+        d.path([[405,60], [429,105,450,165,433,255]], vein);
+        d.path([[472,136], [474,178,467,217,450,250]], vein);
+        d.path([[285,273], [331,231,404,243,439,281], [471,315,460,359,436,389],
+          [461,402,455,429,431,433], [415,433,401,430,395,421], [352,411,295,413,254,391]], skin);
+        d.path([[173,349], [150,378,155,417,179,426], [191,428,205,429,213,421], [218,405,215,391,211,379]], skin);
+        d.path([[289,364], [272,391,271,422,293,430], [309,436,329,429,334,415], [337,400,328,383,322,375]], skin);
+        d.path([[150,275], [134,218], [179,230], [216,201,261,197,302,218], [343,205], [336,262],
+          [355,290,349,331,322,357], [285,388,202,390,158,357], [123,330,125,299,150,275]], skin);
+        d.path([[150,244], [167,247], [157,262], [150,244]], spots);
+        d.path([[318,225], [326,222], [324,244]], spots);
+        d.path([[222,230], [238,218], [255,234], [240,252], [222,230]], spots);
+        d.path([[262,259], [276,246], [286,262], [272,273], [262,259]], spots);
+        d.path([[149,313], [162,306], [170,323], [158,331], [149,313]], spots);
+        d.path([[365,292], [384,278], [395,301], [377,314], [365,292]], spots);
+        d.path([[411,334], [425,321], [438,339], [424,354], [411,334]], spots);
+        d.path([[177,284], [193,265], [211,282], [207,309], [185,310], [177,284]], eye);
+        d.path([[273,279], [293,260], [308,277], [305,305], [282,307], [273,279]], eye);
+        d.path([[191,274], [193,299]], white); d.path([[289,269], [291,295]], white);
+        d.path([[196,340], [223,359,267,357,293,333]], white);
+        d.path([[205,347], [211,357], [215,351]], white); d.path([[277,343], [273,354], [268,350]], white);
+        d.ellipse(231, 326, 2, 2, skin); d.ellipse(253, 323, 2, 2, skin);
+        for (const x of [174, 189, 204]) d.path([[x,415], [x + 2,423]], white);
+        for (const x of [292, 307, 322]) d.path([[x,420], [x + 1,428]], white);
+        for (const x of [413, 427, 441]) d.path([[x,422], [x - 2,429]], white);
+        return d.points;
+      }
+      function makePokeball() {
+        const d = drawing(), red = '255,76,92', white = '223,241,255', rim = '155,191,231';
+        d.ellipse(300, 265, 205, 205, red, Math.PI, TAU);
+        d.ellipse(300, 265, 205, 205, white, 0, Math.PI);
+        d.ellipse(300, 265, 198, 198, red, Math.PI, TAU);
+        d.ellipse(300, 265, 198, 198, white, 0, Math.PI);
+        for (const y of [259, 271]) {
+          d.path([[96,y], [255,y]], rim); d.path([[345,y], [504,y]], rim);
+        }
+        d.ellipse(300, 265, 46, 46, white); d.ellipse(300, 265, 31, 31, white); d.ellipse(300, 265, 8, 8, white);
+        // A few curved highlights suggest the red and white shell without filling it solid.
+        d.ellipse(300, 265, 164, 164, '255,129,137', Math.PI * 1.15, Math.PI * 1.49);
+        d.ellipse(300, 265, 164, 164, '167,205,255', Math.PI * .12, Math.PI * .48);
+        return d.points;
+      }
+      function makeText(text) {
+        const off = document.createElement('canvas'); off.width = 1000; off.height = 180;
+        const pen = off.getContext('2d', { willReadFrequently: true });
+        pen.fillStyle = '#fff'; pen.font = '900 116px "Arial Black", "Segoe UI", sans-serif';
+        pen.textAlign = 'center'; pen.textBaseline = 'middle'; pen.fillText(text, 500, 94, 930);
+        const data = pen.getImageData(0, 0, off.width, off.height).data, points = [];
+        for (let y = 0; y < off.height; y += 4) for (let x = 0; x < off.width; x += 4) {
+          if (data[(y * off.width + x) * 4 + 3] > 150) points.push([(x - 500) / 1000, (y - 90) / 1000, x < 500 ? '255,219,100' : '173,225,255']);
+        }
+        return points;
+      }
+      const patternShows = {
+        'thunder-title': { make: () => makeText('THUNDERBOLT'), hold: 2.1, palette: 1 },
+        pikachu: { make: makePikachu, hold: 4.5, palette: 1 },
+        pokeball: { make: makePokeball, hold: 3.5, palette: 4 },
+        eevee: { make: makeEevee, hold: 4.2, palette: 1 },
+        charmander: { make: makeCharmander, hold: 4.2, palette: 4 },
+        squirtle: { make: makeSquirtle, hold: 4.2, palette: 2 },
+        bulbasaur: { make: makeBulbasaur, hold: 4.2, palette: 3 }
+      };
+      function formation(points, hold = 2.1) {
+        if (!points.length) return;
+        let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+        for (const p of points) { left = Math.min(left, p[0]); right = Math.max(right, p[0]); top = Math.min(top, p[1]); bottom = Math.max(bottom, p[1]); }
+        const spread = Math.min(W * .84 / Math.max(.1, right - left), H * .64 / Math.max(.1, bottom - top), 1050);
+        const cx = (left + right) * .5, cy = (top + bottom) * .5, x = W * .5, y = H * .42;
+        const colorSet = choose(palettes), maximum = reduced ? 800 : mobile ? 1250 : 1850;
+        formations = [];
+        for (const p of particles) p.life = Math.min(p.life, .9);
+        const count = Math.min(points.length, maximum), release = 1.2 + hold;
+        for (let i = 0; i < count; i++) {
+          const p = points[Math.floor(i * points.length / count)], color = p[2] || colorSet[Math.floor((p[0] + .5) * 3) % 3];
+          formations.push({ sx: x + random(-4, 4), sy: y + random(-4, 4), x, y, px: x, py: y,
+            tx: x + (p[0] - cx) * spread, ty: y + (p[1] - cy) * spread, age: -random(0, .22), release, life: release + random(1.8, 2.4),
+            vx: random(-65, 65), vy: random(-65, 45), color: color || colorSet[0], radius: random(.8, 1.5), seed: random(0, TAU) });
+        }
+        if (!reduced) rings.push({ x, y, r: spread * .5, age: 0, life: 1.1, color: colorSet[0] });
+        boom(.5, 1.2);
+      }
+      function runCue(type) {
+        if (type === 'opening') {
+          fire(W * .5, H * .28, 'sphere', 1.12, palettes[1], { origin: .49, duration: 4.2, hold: .35 });
+        }
+        if (type === 'second') {
+          fire(W * .3, H * .32, 'sphere', .95, palettes[2], { origin: .28, duration: 2.9, hold: .2 });
+          later(1.5, .73, .27, 'saturn', 1.05, palettes[0]);
+        }
+        if (type === 'cross') { later(0, .18, .4, 'sphere', 1.1); later(.22, .84, .33, 'saturn', 1.2); }
+        if (type === 'fan') {
+          for (let i = 0; i < (reduced ? 3 : 8); i++) later(i * .2, .12 + i * .105, .25 + Math.sin(i) * .12, i % 3 === 0 ? 'saturn' : 'sphere', random(.7, 1.15), palettes[i % palettes.length]);
+        }
+        if (type === 'gold') { fire(W * .32, H * .2, 'willow', 1.25, palettes[1]); if (!reduced) later(.55, .73, .24, 'willow', 1.25, palettes[1]); }
+        if (Object.hasOwn(patternShows, type)) {
+          const show = patternShows[type];
+          fire(W * .5, H * .42, 'sphere', 1, palettes[show.palette], { duration: 2.2, pattern: type });
+          if (['eevee', 'charmander', 'squirtle', 'bulbasaur'].includes(type)) {
+            later(3.8, .12, .28, type === 'charmander' ? 'willow' : 'ring', .55, palettes[show.palette]);
+            if (!reduced) later(4.3, .88, .29, type === 'eevee' ? 'willow' : 'sphere', .55, palettes[show.palette]);
+          }
+        }
+        if (type === 'thunder') {
+          const d = drawing();
+          d.path([[135,28], [96,158], [151,144], [102,310], [201,111], [147,127], [180,28]], '255,227,103');
+          d.path([[447,20], [420,134], [461,121], [408,305], [520,89], [470,103], [494,20]], '177,227,255');
+          for (const p of d.points) { const x = W * (.5 + p[0] * .82), y = H * (.12 + (p[1] + .45) * .65); spark(x, y, random(-18, 18), random(0, 25), p[2], random(1.1, 1.8), 1.4, 18, .8); }
+          if (!reduced) { later(.3, .13, .25, 'ring', .6, palettes[1]); later(.65, .87, .24, 'ring', .6, palettes[2]); }
+          boom(.5, 1.1);
+        }
+        if (type === 'hearts') {
+          fire(W * .5, H * .34, 'heart', 1.2, palettes[0]);
+          later(.7, .18, .26, 'heart', .65, palettes[2]); later(1.1, .84, .26, 'heart', .65, palettes[4]);
+        }
+        if (type === 'rings') { for (let i = 0; i < 5; i++) later(i * .35, .18 + i * .16, .3 + Math.sin(i * 2) * .12, 'saturn', .95, palettes[i]); }
+        if (type === 'finale') {
+          for (let i = 0; i < (reduced ? 6 : mobile ? 25 : 38); i++) later(i * (reduced ? .85 : .19), .08 + (i * .618 % 1) * .84, random(.12, .46), i % 5 === 0 ? 'willow' : i % 3 === 0 ? 'saturn' : 'sphere', random(.75, 1.35), palettes[i % palettes.length]);
+        }
+      }
+      function paint(dt) {
+        ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = `rgba(0,0,0,${1 - Math.exp(-dt * (formations.length ? 11 : 8))})`; ctx.fillRect(0, 0, W, H);
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = halos.length - 1; i >= 0; i--) {
+          const h = halos[i]; h.age += dt; if (h.age >= h.life) { halos.splice(i, 1); continue; }
+          const r = Math.max(1, h.r * (.2 + h.age * h.tempo * .65)), g = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, r);
+          g.addColorStop(0, `rgba(${h.color},${Math.max(0, 1 - h.age / h.life) * .052})`); g.addColorStop(.45, `rgba(${h.color},.006)`); g.addColorStop(1, 'transparent');
+          ctx.fillStyle = g; ctx.fillRect(h.x - r, h.y - r, r * 2, r * 2);
+        }
+        for (let i = rockets.length - 1; i >= 0; i--) {
+          const r = rockets[i]; r.age += dt; const t = Math.min(1, r.age / r.life);
+          r.x = r.sx + (r.tx - r.sx) * t; r.y = r.sy + (r.ty - r.sy) * (1 - Math.pow(1 - t, 1.8));
+          r.trail.push([r.x, r.y]); if (r.trail.length > 16) r.trail.shift();
+          ctx.strokeStyle = `rgba(${r.palette[1]},.5)`; ctx.lineWidth = 1.1; ctx.beginPath(); r.trail.forEach((p, j) => j ? ctx.lineTo(...p) : ctx.moveTo(...p)); ctx.stroke();
+          r.shed += dt;
+          if (t < 1 && r.shed >= .045) {
+            spark(r.x + random(-1, 1), r.y, random(-7, 7), random(18, 35), r.palette[1], random(.35, .65), .65, 25, 1.1);
+            r.shed = 0;
+          }
+          const ember = Math.max(0, 1 - Math.max(0, r.age - r.life) / Math.max(.01, r.hold));
+          ctx.fillStyle = `rgba(255,244,222,${ember})`; ctx.fillRect(r.x - 1, r.y - 2, 2, 4);
+          if (r.age >= r.life + r.hold) {
+            if (Object.hasOwn(patternShows, r.pattern)) { const show = patternShows[r.pattern]; formation(show.make(), show.hold); }
+            else burst(r.tx, r.ty, r.type, r.scale, r.palette);
+            rockets.splice(i, 1);
+          }
+        }
+        for (let i = rings.length - 1; i >= 0; i--) {
+          const r = rings[i]; r.age += dt; if (r.age >= r.life) { rings.splice(i, 1); continue; }
+          const t = r.age / r.life; ctx.strokeStyle = `rgba(${r.color},${Math.pow(1 - t, 2) * .17})`; ctx.lineWidth = .8;
+          ctx.beginPath(); ctx.arc(r.x, r.y, Math.max(.1, r.r * (1 - Math.pow(1 - t, 2))), 0, TAU); ctx.stroke();
+        }
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i]; p.life -= dt; if (p.life <= 0) { particles[i] = particles[particles.length - 1]; particles.pop(); continue; }
+          p.px = p.x; p.py = p.y;
+          const drag = Math.exp(-p.drag * dt); p.vx *= drag; p.vy = p.vy * drag + p.gravity * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+          const fade = Math.min(1, p.life / p.total * 1.9), twinkle = p.glitter && p.life < p.total * .55 ? .35 + .65 * Math.pow(Math.sin(p.life * 23 + p.seed), 2) : 1;
+          const alpha = fade * twinkle; ctx.strokeStyle = `rgba(${p.color},${alpha})`; ctx.lineWidth = p.radius;
+          ctx.beginPath(); ctx.moveTo(p.px - p.vx * .035, p.py - p.vy * .035); ctx.lineTo(p.x, p.y); ctx.stroke();
+          if (p.radius > 1.25) { ctx.fillStyle = `rgba(${p.color},${alpha * .085})`; ctx.fillRect(p.x - 2.5, p.y - 2.5, 5, 5); }
+          if (p.glitter && p.life < .7 && p.life > .2 && alpha > .65) { ctx.fillStyle = `rgba(255,250,238,${alpha * .55})`; ctx.fillRect(p.x - 3, p.y, 6, .7); ctx.fillRect(p.x, p.y - 3, .7, 6); }
+        }
+        for (let i = formations.length - 1; i >= 0; i--) {
+          const p = formations[i]; p.age += dt; if (p.age < 0) continue;
+          if (p.age > p.life) { formations.splice(i, 1); continue; }
+          p.px = p.x; p.py = p.y;
+          if (p.age < 1.2) {
+            const t = 1 - Math.pow(1 - p.age / 1.2, 3); p.x = p.sx + (p.tx - p.sx) * t; p.y = p.sy + (p.ty - p.sy) * t;
+          } else if (p.age < p.release) {
+            p.x = p.tx + Math.sin(p.age * 3 + p.seed) * .65; p.y = p.ty + Math.cos(p.age * 3 + p.seed) * .65;
+          } else {
+            const t = p.age - p.release; p.x = p.tx + p.vx * t; p.y = p.ty + p.vy * t + 22 * t * t;
+          }
+          const fade = Math.min(1, (p.life - p.age) / 1.8), twinkle = .65 + .35 * Math.pow(Math.sin(p.age * 9 + p.seed), 2);
+          ctx.strokeStyle = `rgba(${p.color},${fade * twinkle})`; ctx.lineWidth = p.radius;
+          ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(p.x, p.y); ctx.stroke();
+          ctx.fillStyle = `rgba(${p.color},${fade * twinkle})`; ctx.fillRect(p.x - .6, p.y - .6, 1.2, 1.2);
+          ctx.fillStyle = `rgba(${p.color},${fade * .1})`; ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+      function reset() {
+        time = 0; cue = 0; nextRandom = 2.8; lastBurst = -1; queue = []; particles = []; rockets = []; rings = []; halos = []; formations = []; pointer = null;
+        ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      }
+      function frame(ms) {
+        const dt = last === null ? 0 : Math.min(.05, Math.max(0, (ms - last) / 1000)) * playbackSpeed; last = ms;
+        if (!paused && !document.hidden) {
+          time += dt;
+          if (time >= duration) reset();
+          while (cue < schedule.length && time >= schedule[cue][0]) { runCue(schedule[cue][1]); cue++; }
+          if (time >= intro) {
+            if (time >= 18) nextRandom -= dt;
+            if (time >= 18 && time < duration - 8 && nextRandom <= 0) {
+              const framing = formations.length > 0 || (time >= 24.5 && time < 89.5);
+              const x = framing ? choose([random(.07, .18), random(.82, .93)]) : random(.14, .86);
+              fire(W * x, H * random(.14, .45), framing ? 'sphere' : undefined, framing ? .48 : random(.6, .95));
+              nextRandom = reduced ? 4.5 : framing ? 2.2 : time < 32 ? random(2.6, 3.7) : time < 98 ? random(1.2, 2) : random(.7, 1.2);
+            }
+            for (let i = queue.length - 1; i >= 0; i--) if (time >= queue[i].at) { const q = queue[i]; fire(W * q.x, H * q.y, q.type, q.scale, q.palette); queue.splice(i, 1); }
+            if (pointer) { pointerDelay -= dt; if (pointerDelay <= 0) { fire(pointer.x, pointer.y); pointerDelay = reduced ? 1.2 : .22; } }
+            paint(dt);
+            // Return to absolute black before the next unexpected opening.
+            if (time > duration - 3) { ctx.fillStyle = `rgba(0,0,0,${Math.min(1, dt * 3)})`; ctx.fillRect(0, 0, W, H); }
+          }
+        }
+        requestAnimationFrame(frame);
+      }
+      async function enableSound() {
+        if (soundReady) return;
+        try {
+          if (!audio) {
+            const Audio = window.AudioContext || window.webkitAudioContext; audio = new Audio(); output = audio.createGain(); output.gain.value = .45; output.connect(audio.destination);
+            noise = audio.createBuffer(1, Math.floor(audio.sampleRate * 1.5), audio.sampleRate); const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+          }
+          await audio.resume(); soundReady = true;
+        } catch {}
+      }
+      function boom(pan, scale) {
+        if (!soundReady || !audio || document.hidden || time - lastBurst < .16) return; lastBurst = time;
+        const osc = audio.createOscillator(), bass = audio.createGain(), at = audio.currentTime;
+        osc.frequency.setValueAtTime(90, at); osc.frequency.exponentialRampToValueAtTime(25, at + .7);
+        bass.gain.setValueAtTime(.3 * Math.min(scale, 1.3), at); bass.gain.exponentialRampToValueAtTime(.0001, at + .9);
+        osc.connect(bass); bass.connect(output); osc.start(); osc.stop(at + 1);
+        const source = audio.createBufferSource(), filter = audio.createBiquadFilter(), gain = audio.createGain(), stereo = audio.createStereoPanner();
+        source.buffer = noise; filter.type = 'lowpass'; filter.frequency.value = 1800; stereo.pan.value = Math.max(-1, Math.min(1, pan * 2 - 1));
+        gain.gain.setValueAtTime(.15, at); gain.gain.exponentialRampToValueAtTime(.0001, at + 1.4);
+        source.connect(filter); filter.connect(gain); gain.connect(stereo); stereo.connect(output); source.start(); source.stop(at + 1.5);
+      }
+      canvas.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return; enableSound();
+        if (time < intro || paused) return;
+        pointer = { x: e.clientX, y: Math.max(H * .08, Math.min(H * .75, e.clientY)) }; pointerDelay = .25;
+        canvas.setPointerCapture(e.pointerId); fire(pointer.x, pointer.y);
+      });
+      canvas.addEventListener('pointermove', e => { if (pointer) { pointer.x = e.clientX; pointer.y = Math.max(H * .08, Math.min(H * .75, e.clientY)); } });
+      for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(name, () => { pointer = null; });
+      canvas.addEventListener('dblclick', async () => { try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen(); } catch {} });
+      document.addEventListener('keydown', e => {
+        if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.code === 'Space') { e.preventDefault(); paused = !paused; pointer = null; }
+        if (e.key.toLowerCase() === 'r') { reset(); paused = false; }
+      });
+      document.addEventListener('visibilitychange', () => {
+        last = null; pointer = null;
+        if (audio) { if (document.hidden) audio.suspend().catch(() => {}); else if (soundReady) audio.resume().catch(() => {}); }
+      });
+      addEventListener('blur', () => { pointer = null; });
+      addEventListener('resize', size); size();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
